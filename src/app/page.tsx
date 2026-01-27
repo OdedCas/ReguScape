@@ -13,8 +13,15 @@ export default function Home() {
             מערכת ReguScape מאפשרת לחפש מידע תכנוני על נכסים בישראל.
           </p>
           <p style={{ marginTop: '0.5rem', color: '#666' }}>
-            הפיתוח בהתקדמות - טופס החיפוש ומערכת הלוגים יתווספו בקרוב.
+            טופס החיפוש יתווסף בשלבים הבאים של הפיתוח.
           </p>
+        </div>
+
+        <div className="card">
+          <h2>קישורים</h2>
+          <ul style={{ marginTop: '1rem', paddingRight: '1.5rem' }}>
+            <li><a href="/logs">צפייה בלוגים</a></li>
+          </ul>
         </div>
       </main>
     </div>
