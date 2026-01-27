@@ -2,58 +2,58 @@
 
 export default function Home() {
   return (
-    <div className="landing">
+    <div className="landing" dir="rtl">
       <header className="hero">
-        <span className="coming-soon-badge">Coming Soon</span>
+        <span className="coming-soon-badge">בקרוב</span>
         <h1>ReguScape</h1>
         <p className="tagline">
-          Your future gateway to Israeli property planning information
+          השער שלך למידע תכנוני על נכסים בישראל
         </p>
         <p className="subtitle">
-          פלטפורמה למידע תכנוני על נכסים בישראל
+          גלה תוכניות בניין, זכויות בנייה ומידע רגולטורי בקלות
         </p>
       </header>
 
       <section className="vision">
-        <h2>What We&apos;re Building</h2>
+        <h2>מה אנחנו בונים</h2>
         <p>
-          ReguScape will provide instant access to planning regulations, building rights,
-          and zoning information for any property in Israel. Our goal is to make
-          complex regulatory data accessible and understandable.
+          ReguScape תספק גישה מיידית לתקנות תכנון, זכויות בנייה ומידע ייעודי
+          לכל נכס בישראל. המטרה שלנו היא להפוך מידע רגולטורי מורכב
+          לנגיש ומובן לכולם.
         </p>
       </section>
 
       <main className="features">
-        <h2>Planned Features</h2>
+        <h2>תכונות מתוכננות</h2>
         <div className="features-grid">
           <div className="feature">
             <div className="feature-icon">📍</div>
-            <h3>Address Search</h3>
-            <p>Find any property by city, street, and number</p>
+            <h3>חיפוש לפי כתובת</h3>
+            <p>מצא כל נכס לפי עיר, רחוב ומספר בית</p>
           </div>
           <div className="feature">
             <div className="feature-icon">🗺️</div>
-            <h3>Parcel Lookup</h3>
-            <p>Direct search by block and parcel numbers (גוש/חלקה)</p>
+            <h3>חיפוש לפי גוש וחלקה</h3>
+            <p>חיפוש ישיר לפי מספרי גוש וחלקה</p>
           </div>
           <div className="feature">
             <div className="feature-icon">📋</div>
-            <h3>Planning Data</h3>
-            <p>Access zoning plans, building rights, and setback requirements</p>
+            <h3>מידע תכנוני</h3>
+            <p>גישה לתוכניות בניין, זכויות בנייה וקווי בניין</p>
           </div>
           <div className="feature">
             <div className="feature-icon">🔍</div>
-            <h3>GovMap Integration</h3>
-            <p>Real-time data from official government sources</p>
+            <h3>אינטגרציה עם GovMap</h3>
+            <p>מידע בזמן אמת ממקורות ממשלתיים רשמיים</p>
           </div>
         </div>
       </main>
 
       <footer className="footer">
-        <p className="status">Development in progress</p>
+        <p className="status">בפיתוח</p>
         <p className="repo">
           <a href="https://github.com/OdedCas/ReguScape" target="_blank" rel="noopener noreferrer">
-            View on GitHub
+            צפה ב-GitHub
           </a>
         </p>
       </footer>
