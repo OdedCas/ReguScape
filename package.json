@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "npx serve out",
+    "preview": "PREVIEW=true next build && npx serve out",
     "lint": "next lint",
     "test": "jest"
   },
