@@ -20,38 +20,35 @@
 
 ## טכנולוגיות
 
-- Next.js 14 (App Router)
+- Next.js 16 (App Router)
 - TypeScript
 - Puppeteer (headless browsing)
 - Jest (testing)
+- pnpm (package manager)
 
 ## התקנה
 
 ```bash
-npm install
+pnpm install
 ```
 
 ## הרצה
 
 ```bash
 # Development
-npm run dev
+pnpm dev
 
 # Production build
-npm run build
-npm start
+pnpm build
+pnpm start
 ```
 
 ## טסטים
 
 ```bash
-npm test
+pnpm test
 ```
 
-## מבנה Branches
+## למה pnpm?
 
-- `claude/setup-init-RnKeh` - מבנה בסיסי
-- `claude/feature-logging-RnKeh` - מערכת לוגים
-- `claude/feature-govmap-api-RnKeh` - חיבור ל-GovMap API
-- `claude/feature-plan-list-RnKeh` - הצגת תכניות
-- `claude/feature-building-data-RnKeh` - נתוני זכויות בנייה
+הפרויקט משתמש ב-pnpm במקום npm בשל אבטחה משופרת. pnpm מציע הגנות טובות יותר נגד פגיעויות בשרשרת האספקה, כולל תיקון ל-[PackageGate vulnerabilities](https://www.koi.ai/blog/packagegate-6-zero-days-in-js-package-managers-but-npm-wont-act).
