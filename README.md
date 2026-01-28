@@ -12,46 +12,15 @@
 
 - פרטי נכס (גוש, חלקה, כתובת)
 - תכניות בניין עיר (תב"ע) החלות על הנכס
-- זכויות בנייה:
-  - שטח בנייה מותר (מ"ר)
-  - מספר קומות מותר
-  - גובה מבנה מותר
-  - קווי בניין
-
-## טכנולוגיות
-
-- Next.js 14 (App Router)
-- TypeScript
-- Puppeteer (headless browsing)
-- Jest (testing)
-
-## התקנה
-
-```bash
-npm install
-```
+- זכויות בנייה: שטח מותר, מספר קומות, גובה מבנה, קווי בניין
 
 ## הרצה
 
 ```bash
-# Development
-npm run dev
-
-# Production build
-npm run build
-npm start
+pnpm install
+pnpm dev
 ```
 
-## טסטים
+## רישיון
 
-```bash
-npm test
-```
-
-## מבנה Branches
-
-- `claude/setup-init-RnKeh` - מבנה בסיסי
-- `claude/feature-logging-RnKeh` - מערכת לוגים
-- `claude/feature-govmap-api-RnKeh` - חיבור ל-GovMap API
-- `claude/feature-plan-list-RnKeh` - הצגת תכניות
-- `claude/feature-building-data-RnKeh` - נתוני זכויות בנייה
+MIT
