@@ -7,10 +7,10 @@ export default function Home() {
         <span className="coming-soon-badge">בקרוב</span>
         <h1>ReguScape</h1>
         <p className="tagline">
-          השער שלך למידע תכנוני על נכסים בישראל
+          אוטומציה ליצירת מערכות מידע תכנוני
         </p>
         <p className="subtitle">
-          גלה תוכניות בניין, זכויות בנייה ומידע רגולטורי בקלות
+          מבוססות על תקנים וקודים רגולטוריים דינמיים
         </p>
       </header>
 
