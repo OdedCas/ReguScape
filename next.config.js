@@ -8,9 +8,6 @@ const nextConfig = {
   basePath: isProd && !isPreview ? '/ReguScape' : '',
   images: { unoptimized: true },
   reactStrictMode: true,
-  turbopack: {
-    root: __dirname,
-  },
 };
 
 module.exports = nextConfig;
