@@ -1,213 +1,254 @@
 'use client';
 
+import { useState } from 'react';
+import SearchForm from '@/components/SearchForm';
+import ResultsDisplay from '@/components/ResultsDisplay';
+import type {
+  BuildingRegulations,
+  EnrichedSearchResult,
+  ExternalLinks,
+  LandPlotIdentifiers,
+  ParcelRegistrationInfo,
+  ParcelUsageCode,
+  PlanInfo,
+  SearchApiResponse,
+  SearchParams,
+  TabaInfo,
+  TabaPlansResponse,
+} from '@/types';
+
+interface ParcelInfoResponse {
+  registration: ParcelRegistrationInfo | null;
+  usageCode: ParcelUsageCode | null;
+}
+
+type RouteError = {
+  error?: string;
+};
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return 'שגיאה לא צפויה';
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const payload = (await response.json().catch(() => ({}))) as T & RouteError;
+
+  if (!response.ok) {
+    const message = typeof payload.error === 'string' && payload.error.length > 0
+      ? payload.error
+      : `Request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return payload as T;
+}
+
+function tabaPlansToPlanInfo(plans: TabaInfo[]): PlanInfo[] {
+  return plans.map((plan) => ({
+    planNumber: plan.taba_code || 'ללא קוד',
+    planName: plan.taba_description || 'ללא תיאור',
+    planStatus: plan.plan_status,
+    planType: 'תב"ע',
+    locality: plan.locality,
+    place: plan.place,
+    takanonUrl: plan.takanon_url,
+    planPageUrl: plan.plan_page_url,
+    lotSizeSqm: plan.lot_size_sqm,
+    maxFloors: plan.max_floors,
+    maxBuildableAreaSqm: plan.max_buildable_area_sqm,
+    source: plan.source,
+  }));
+}
+
+function mergePlans(existingPlans: PlanInfo[], incomingPlans: PlanInfo[]): PlanInfo[] {
+  const merged = new Map<string, PlanInfo>();
+  for (const plan of existingPlans) {
+    merged.set(`${plan.planNumber}|${plan.planName}`, plan);
+  }
+  for (const plan of incomingPlans) {
+    const key = `${plan.planNumber}|${plan.planName}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, plan);
+    } else {
+      merged.set(key, {
+        ...current,
+        ...plan,
+        planStatus: plan.planStatus || current.planStatus,
+        locality: plan.locality || current.locality,
+        place: plan.place || current.place,
+        takanonUrl: plan.takanonUrl || current.takanonUrl,
+        planPageUrl: plan.planPageUrl || current.planPageUrl,
+        lotSizeSqm: plan.lotSizeSqm || current.lotSizeSqm,
+        maxFloors: plan.maxFloors || current.maxFloors,
+        maxBuildableAreaSqm: plan.maxBuildableAreaSqm || current.maxBuildableAreaSqm,
+        source: plan.source || current.source,
+      });
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function mergeExternalLinks(
+  existing: ExternalLinks | undefined,
+  incoming: Partial<ExternalLinks>,
+): ExternalLinks {
+  return {
+    govmapTabaUrl: incoming.govmapTabaUrl || existing?.govmapTabaUrl,
+    govmapParcelUrl: incoming.govmapParcelUrl || existing?.govmapParcelUrl,
+    iplanUrl: incoming.iplanUrl || existing?.iplanUrl,
+  };
+}
+
 export default function Home() {
+  const [result, setResult] = useState<EnrichedSearchResult | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSearch = async (params: SearchParams) => {
+    setIsLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const searchData = await fetchJson<SearchApiResponse>('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+
+      if (!searchData.success || !searchData.data) {
+        throw new Error(searchData.error || 'שגיאה בחיפוש');
+      }
+
+      const enriched: EnrichedSearchResult = {
+        ...searchData.data,
+        plans: searchData.data.plans || [],
+        externalLinks: searchData.data.externalLinks,
+      };
+      let warning: string | null = null;
+
+      let resolvedGush = enriched.location.gush?.trim() || '';
+      let resolvedHelka = enriched.location.helka?.trim() || '';
+      const shouldLookupLandPlot = params.mode === 'gush-helka'
+        || !resolvedGush
+        || !resolvedHelka;
+
+      if (shouldLookupLandPlot) {
+        try {
+          const landPlotQuery = params.mode === 'address'
+            ? `address=${encodeURIComponent(params.query)}`
+            : `gush=${encodeURIComponent(resolvedGush || params.gush)}&helka=${encodeURIComponent(resolvedHelka || params.helka)}`;
+
+          const landPlot = await fetchJson<LandPlotIdentifiers>(
+            `/api/land-plot-identifiers?${landPlotQuery}`,
+          );
+          enriched.landPlot = landPlot;
+
+          if (landPlot.gush) {
+            resolvedGush = landPlot.gush;
+            enriched.location.gush = landPlot.gush;
+          }
+          if (landPlot.helka) {
+            resolvedHelka = landPlot.helka;
+            enriched.location.helka = landPlot.helka;
+          }
+
+          if (params.mode === 'gush-helka' && landPlot.addresses.length > 0) {
+            const bestAddress = landPlot.addresses[0];
+            const gushLabel = resolvedGush || params.gush;
+            const helkaLabel = resolvedHelka || params.helka;
+            enriched.location.label = `${bestAddress} (גוש ${gushLabel}, חלקה ${helkaLabel})`;
+          }
+        } catch (lookupError) {
+          warning = getErrorMessage(lookupError);
+        }
+      }
+
+      if (resolvedGush && resolvedHelka) {
+        try {
+          const [tabaResponse, regulations, parcelInfo] = await Promise.all([
+            fetchJson<TabaPlansResponse>(
+              `/api/taba-info?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
+            ),
+            fetchJson<BuildingRegulations>(
+              `/api/building-regulations?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
+            ),
+            fetchJson<ParcelInfoResponse>(
+              `/api/parcel-info?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
+            ).catch(() => null),
+          ]);
+
+          // Store TABA plans
+          const tabaPlans = Array.isArray(tabaResponse.plans) ? tabaResponse.plans : [];
+          enriched.tabaPlans = tabaPlans;
+          if (tabaPlans.length > 0) {
+            enriched.taba = tabaPlans[0];
+            enriched.plans = mergePlans(enriched.plans, tabaPlansToPlanInfo(tabaPlans));
+          }
+
+          // Merge external links from taba response
+          enriched.externalLinks = mergeExternalLinks(enriched.externalLinks, {
+            govmapTabaUrl: tabaResponse.govmap_taba_url,
+            iplanUrl: tabaResponse.iplan_url,
+          });
+
+          // Store regulations and its GovMap URL
+          enriched.regulations = regulations;
+          if (enriched.plans.length > 0) {
+            enriched.plans = enriched.plans.map((plan) => ({
+              ...plan,
+              maxFloors: plan.maxFloors || (regulations.max_floors > 0 ? regulations.max_floors : undefined),
+              maxBuildableAreaSqm: plan.maxBuildableAreaSqm
+                || (regulations.max_buildable_area_sqm > 0 ? regulations.max_buildable_area_sqm : undefined),
+            }));
+          }
+
+          // Store parcel registration & usage code
+          if (parcelInfo) {
+            if (parcelInfo.registration) {
+              enriched.parcelRegistration = parcelInfo.registration;
+            }
+            if (parcelInfo.usageCode) {
+              enriched.parcelUsageCode = parcelInfo.usageCode;
+            }
+          }
+        } catch (enrichmentError) {
+          warning = warning || getErrorMessage(enrichmentError);
+        }
+      } else if (params.mode === 'address') {
+        warning = warning || 'לא נמצא גוש/חלקה עבור הכתובת - ניתן לבדוק ב-GovMap';
+      }
+
+      setResult(enriched);
+      setError(warning);
+    } catch (searchError) {
+      setError(getErrorMessage(searchError));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
-    <div className="landing" dir="rtl">
-      <header className="hero">
-        <span className="coming-soon-badge">בקרוב</span>
-        <h1>ReguScape</h1>
-        <p className="tagline">
-          אוטומציה ליצירת מערכות מידע תכנוני
-        </p>
-        <p className="subtitle">
-          מבוססות על תקנים וקודים רגולטוריים דינמיים
-        </p>
+    <div className="container">
+      <header className="app-header">
+        <h1>Regu<span>Scape</span></h1>
+        <p>חיפוש מידע תכנוני ותוכניות בניין על נכסים בישראל</p>
       </header>
 
-      <section className="vision">
-        <h2>מה אנחנו בונים</h2>
-        <p>
-          ReguScape תספק גישה מיידית לתקנות תכנון, זכויות בנייה ומידע ייעודי
-          לכל נכס בישראל. המטרה שלנו היא להפוך מידע רגולטורי מורכב
-          לנגיש ומובן לכולם.
-        </p>
-      </section>
+      <SearchForm onSearch={handleSearch} isLoading={isLoading} />
 
-      <main className="features">
-        <h2>תכונות מתוכננות</h2>
-        <div className="features-grid">
-          <div className="feature">
-            <div className="feature-icon">📍</div>
-            <h3>חיפוש לפי כתובת</h3>
-            <p>מצא כל נכס לפי עיר, רחוב ומספר בית</p>
-          </div>
-          <div className="feature">
-            <div className="feature-icon">🗺️</div>
-            <h3>חיפוש לפי גוש וחלקה</h3>
-            <p>חיפוש ישיר לפי מספרי גוש וחלקה</p>
-          </div>
-          <div className="feature">
-            <div className="feature-icon">📋</div>
-            <h3>מידע תכנוני</h3>
-            <p>גישה לתוכניות בניין, זכויות בנייה וקווי בניין</p>
-          </div>
-          <div className="feature">
-            <div className="feature-icon">🔍</div>
-            <h3>אינטגרציה עם GovMap</h3>
-            <p>מידע בזמן אמת ממקורות ממשלתיים רשמיים</p>
-          </div>
+      {error && (
+        <div className="error" style={{ marginTop: '1rem' }}>
+          {error}
         </div>
-      </main>
+      )}
 
-      <footer className="footer">
-        <p className="status">בפיתוח</p>
-        <p className="repo">
-          <a href="https://github.com/OdedCas/ReguScape" target="_blank" rel="noopener noreferrer">
-            צפה ב-GitHub
-          </a>
-        </p>
-      </footer>
-
-      <style jsx>{`
-        .landing {
-          min-height: 100vh;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          padding: 3rem 2rem;
-          background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
-        }
-
-        .hero {
-          text-align: center;
-          margin-bottom: 3rem;
-        }
-
-        .coming-soon-badge {
-          display: inline-block;
-          padding: 0.5rem 1.5rem;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          color: white;
-          border-radius: 9999px;
-          font-size: 0.875rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin-bottom: 1.5rem;
-        }
-
-        .hero h1 {
-          font-size: 3.5rem;
-          color: #1a202c;
-          margin: 0 0 1rem 0;
-          font-weight: 800;
-          letter-spacing: -0.02em;
-        }
-
-        .tagline {
-          font-size: 1.5rem;
-          color: #4a5568;
-          margin: 0 0 0.5rem 0;
-          font-weight: 400;
-        }
-
-        .subtitle {
-          font-size: 1.125rem;
-          color: #718096;
-          margin: 0;
-        }
-
-        .vision {
-          max-width: 700px;
-          text-align: center;
-          margin-bottom: 3rem;
-          padding: 2rem;
-          background: white;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-        }
-
-        .vision h2 {
-          font-size: 1.5rem;
-          color: #2d3748;
-          margin: 0 0 1rem 0;
-        }
-
-        .vision p {
-          color: #4a5568;
-          line-height: 1.7;
-          margin: 0;
-        }
-
-        .features {
-          max-width: 900px;
-          width: 100%;
-          margin-bottom: 3rem;
-        }
-
-        .features h2 {
-          text-align: center;
-          font-size: 1.5rem;
-          color: #2d3748;
-          margin: 0 0 2rem 0;
-        }
-
-        .features-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 1.5rem;
-        }
-
-        .feature {
-          background: white;
-          padding: 1.5rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-          transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .feature:hover {
-          transform: translateY(-4px);
-          box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-        }
-
-        .feature-icon {
-          font-size: 2rem;
-          margin-bottom: 1rem;
-        }
-
-        .feature h3 {
-          font-size: 1.125rem;
-          color: #2d3748;
-          margin: 0 0 0.5rem 0;
-        }
-
-        .feature p {
-          font-size: 0.875rem;
-          color: #718096;
-          margin: 0;
-          line-height: 1.5;
-        }
-
-        .footer {
-          text-align: center;
-          margin-top: auto;
-        }
-
-        .status {
-          display: inline-block;
-          padding: 0.5rem 1rem;
-          background: #fef3c7;
-          color: #92400e;
-          border-radius: 9999px;
-          font-size: 0.875rem;
-          margin: 0 0 1rem 0;
-        }
-
-        .repo {
-          margin: 0;
-        }
-
-        .repo a {
-          color: #667eea;
-          text-decoration: none;
-          font-size: 0.875rem;
-        }
-
-        .repo a:hover {
-          text-decoration: underline;
-        }
-      `}</style>
+      <ResultsDisplay result={result} />
     </div>
   );
 }

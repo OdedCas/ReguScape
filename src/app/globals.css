@@ -1,9 +1,23 @@
 :root {
   --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-light: #dbeafe;
   --error: #dc2626;
+  --error-bg: #fef2f2;
   --success: #16a34a;
-  --border: #e5e7eb;
-  --background: #f9fafb;
+  --success-bg: #f0fdf4;
+  --border: #e2e8f0;
+  --background: #f1f5f9;
+  --surface: #ffffff;
+  --text: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
+  --radius: 10px;
+  --radius-lg: 16px;
 }
 
 * {
@@ -13,80 +27,128 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Noto Sans Hebrew', sans-serif;
   background: var(--background);
-  color: #1f2937;
+  color: var(--text);
   line-height: 1.6;
+  min-height: 100vh;
 }
 
 .container {
-  max-width: 1200px;
+  max-width: 720px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 2rem 1.5rem;
 }
 
-h1 {
-  font-size: 2rem;
-  color: #111827;
+/* Header */
+.app-header {
+  text-align: center;
+  padding: 2.5rem 0 2rem;
+}
+
+.app-header h1 {
+  font-size: 2.25rem;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.02em;
   margin-bottom: 0.5rem;
 }
 
-h2 {
-  font-size: 1.25rem;
-  color: #374151;
-  margin-bottom: 1rem;
+.app-header h1 span {
+  color: var(--primary);
 }
 
+.app-header p {
+  color: var(--text-secondary);
+  font-size: 1.05rem;
+}
+
+/* Cards */
 .card {
-  background: white;
-  border-radius: 8px;
-  padding: 1.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 1.75rem;
+  box-shadow: var(--shadow);
   margin-bottom: 1rem;
 }
 
+/* Inputs */
 .input {
   width: 100%;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  padding: 0.8rem 1rem;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
   font-size: 1rem;
+  color: var(--text);
+  background: var(--surface);
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.input:disabled {
+  background: var(--background);
+  color: var(--text-muted);
+}
+
+/* Buttons */
 .btn {
-  padding: 0.75rem 1.5rem;
-  border-radius: 6px;
+  padding: 0.8rem 1.5rem;
+  border-radius: var(--radius);
   font-size: 1rem;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   border: none;
   background: var(--primary);
   color: white;
-  transition: background 0.2s;
+  transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+  box-shadow: var(--shadow-sm);
 }
 
 .btn:hover {
-  background: #1d4ed8;
+  background: var(--primary-dark);
+  box-shadow: var(--shadow);
+}
+
+.btn:active {
+  transform: scale(0.98);
 }
 
 .btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
+.btn-outline {
+  background: var(--surface);
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+}
+
+.btn-outline:hover {
+  background: var(--primary-light);
+}
+
+/* Error */
 .error {
   color: var(--error);
-  padding: 1rem;
-  background: #fef2f2;
-  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  background: var(--error-bg);
+  border-radius: var(--radius);
+  border: 1px solid #fecaca;
+  font-size: 0.95rem;
 }
 
+/* Links */
 a {
   color: var(--primary);
   text-decoration: none;
@@ -94,4 +156,35 @@ a {
 
 a:hover {
   text-decoration: underline;
+}
+
+/* Loading spinner */
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-inline-end: 0.5rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .container {
+    padding: 1rem;
+  }
+  .app-header h1 {
+    font-size: 1.75rem;
+  }
+  .card {
+    padding: 1.25rem;
+    border-radius: var(--radius);
+  }
 }
