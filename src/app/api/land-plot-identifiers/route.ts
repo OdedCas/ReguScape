@@ -5,6 +5,7 @@ import {
   getLandPlotIdentifiers,
   getParcelFromAddress,
 } from '@/services/scraper';
+import { getParcelByCoordinates } from '@/services/govmap-parcel';
 
 function parseCoordinate(raw: string | null): number | null {
   if (raw === null) {
@@ -86,7 +87,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       try {
         result = await getParcelFromAddress(address);
       } catch {
-        result = await getLandPlotIdentifiers({ landPlotId: address });
+        try {
+          result = await getLandPlotIdentifiers({ landPlotId: address });
+        } catch {
+          // Scraper entirely unavailable — try coordinate-based GovMap lookup.
+          if (coordinateX !== null && coordinateY !== null) {
+            const parcel = await getParcelByCoordinates(coordinateX, coordinateY);
+            result = {
+              gush: parcel?.gush || '',
+              helka: parcel?.helka || '',
+              addresses: [address],
+            };
+          } else {
+            result = { gush: '', helka: '', addresses: [address] };
+          }
+        }
       }
       return NextResponse.json(result);
     }
@@ -113,11 +128,26 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const msg = error instanceof Error ? error.message : 'שגיאה לא צפויה';
     const isNotConfigured = msg.includes('not configured');
 
-    // When scraper isn't available, return empty identifiers
+    // When scraper isn't available, try coordinate-based GovMap lookup as last resort.
     if (isNotConfigured) {
+      let fallbackGush = hasGush ? gush : '';
+      let fallbackHelka = hasHelka ? helka : '';
+
+      if (!fallbackGush && !fallbackHelka && coordinateX !== null && coordinateY !== null) {
+        try {
+          const parcel = await getParcelByCoordinates(coordinateX, coordinateY);
+          if (parcel) {
+            fallbackGush = parcel.gush;
+            fallbackHelka = parcel.helka;
+          }
+        } catch {
+          // Best-effort; continue with empty identifiers.
+        }
+      }
+
       const fallback: LandPlotIdentifiers = {
-        gush: hasGush ? gush : '',
-        helka: hasHelka ? helka : '',
+        gush: fallbackGush,
+        helka: fallbackHelka,
         addresses: hasAddress ? [address] : [],
       };
       return NextResponse.json(fallback);

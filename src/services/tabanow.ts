@@ -570,31 +570,36 @@ export async function findPlansByParcelFromTabanow(gush: string, helka: string):
   const rows = await searchRowsByBlock(gush);
   const candidates = rows.slice(0, maxPlanDetails());
   const matchedPlans: TabaInfo[] = [];
-  const detailedPlans: TabaInfo[] = [];
+  const unknownPlans: TabaInfo[] = [];
 
   for (const row of candidates) {
     try {
       const details = await fetchPlanDetails(row.href);
       const detailedPlan = buildPlanFromRow(row, details);
-      detailedPlans.push(detailedPlan);
 
-      if (!planContainsParcel(details, gush, helka)) {
+      if (details.parcelRows.length === 0) {
+        // No parcel table — we can't rule this plan out.
+        unknownPlans.push(detailedPlan);
         continue;
       }
-      matchedPlans.push(detailedPlan);
+
+      if (planContainsParcel(details, gush, helka)) {
+        matchedPlans.push(detailedPlan);
+      }
+      // else: parcel table exists but doesn't contain our helka — skip.
     } catch {
-      // Keep collecting from other plans.
+      // Network/parse error — treat as unknown (can't rule it out).
+      unknownPlans.push(buildPlanFromRow(row));
     }
   }
 
   if (matchedPlans.length > 0) {
-    return dedupePlans(matchedPlans);
+    return dedupePlans([...matchedPlans, ...unknownPlans]);
   }
 
-  if (detailedPlans.length > 0) {
-    return dedupePlans(detailedPlans);
+  if (unknownPlans.length > 0) {
+    return dedupePlans(unknownPlans);
   }
 
-  // Fallback: if parcel tables were missing, still return the first search rows.
-  return dedupePlans(candidates.map((row) => buildPlanFromRow(row)));
+  return [];
 }

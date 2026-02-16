@@ -7,6 +7,7 @@ import type {
   GovMapSearchResponse,
   GovMapSearchResult,
 } from '@/types';
+import { getParcelByCoordinates } from '@/services/govmap-parcel';
 
 const GOVMAP_SEARCH_URL = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery';
 
@@ -103,6 +104,19 @@ async function searchByAddress(query: string): Promise<SearchResult> {
 
   const location = resultToLocation(bestResult);
   const plans: PlanInfo[] = [];
+
+  // If GovMap search didn't return gush/helka, try coordinate-based parcel lookup.
+  if ((!location.gush || !location.helka) && location.x && location.y) {
+    try {
+      const parcel = await getParcelByCoordinates(location.x, location.y);
+      if (parcel) {
+        location.gush = parcel.gush;
+        location.helka = parcel.helka;
+      }
+    } catch {
+      // Parcel lookup is best-effort; continue without gush/helka.
+    }
+  }
 
   // Generate external links if we have gush/helka
   let externalLinks: ExternalLinks | undefined;

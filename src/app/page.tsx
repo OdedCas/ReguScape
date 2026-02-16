@@ -140,9 +140,19 @@ export default function Home() {
 
       if (shouldLookupLandPlot) {
         try {
-          const landPlotQuery = params.mode === 'address'
-            ? `address=${encodeURIComponent(params.query)}`
-            : `gush=${encodeURIComponent(resolvedGush || params.gush)}&helka=${encodeURIComponent(resolvedHelka || params.helka)}`;
+          let landPlotQuery: string;
+          if (params.mode === 'address') {
+            landPlotQuery = `address=${encodeURIComponent(params.query)}`;
+            // Pass coordinates so the endpoint can try coordinate-based lookup
+            // when the scraper is unavailable.
+            const cx = enriched.location.x;
+            const cy = enriched.location.y;
+            if (cx && cy) {
+              landPlotQuery += `&coordinate_x=${cx}&coordinate_y=${cy}`;
+            }
+          } else {
+            landPlotQuery = `gush=${encodeURIComponent(resolvedGush || params.gush)}&helka=${encodeURIComponent(resolvedHelka || params.helka)}`;
+          }
 
           const landPlot = await fetchJson<LandPlotIdentifiers>(
             `/api/land-plot-identifiers?${landPlotQuery}`,
