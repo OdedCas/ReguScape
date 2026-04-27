@@ -127,6 +127,29 @@ export interface ExternalLinks {
   iplanUrl?: string;
 }
 
+// ---- Zoning Plans (תב"ע) ----
+
+export interface ZoningPlan {
+  planNumber: string;
+  planName: string;
+  planStatus?: string;
+  planType?: string;
+  depositDate?: string;
+  approvalDate?: string;
+  iplanUrl?: string;
+  takanonUrl?: string;
+  source: string;
+}
+
+export interface ZoningPlansResponse {
+  gush: string;
+  helka: string;
+  address: string;
+  plans: ZoningPlan[];
+  iplanUrl?: string;
+  govmapTabaUrl?: string;
+}
+
 // ---- Parcel Registration & Usage Code (MAVAT) ----
 
 export interface ParcelRegistrationInfo {
