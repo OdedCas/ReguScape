@@ -44,3 +44,6 @@ next-env.d.ts
 .vscode/
 *.swp
 *.swo
+
+# Playwright browser profiles (may contain session cookies)
+.pw-*-profile/

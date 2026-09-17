@@ -8,14 +8,20 @@ import type {
   EnrichedSearchResult,
   ExternalLinks,
   LandPlotIdentifiers,
+  MunicipalParcelPlan,
+  MunicipalParcelPlansResponse,
+  ParcelPlanningData,
+  ParcelPlanComparison,
   ParcelRegistrationInfo,
   ParcelUsageCode,
   PlanInfo,
   SearchApiResponse,
   SearchParams,
   TabaInfo,
+  TabaRadiusPlan,
   TabaPlansResponse,
 } from '@/types';
+import type { XplanQueryResult } from '@/services/xplan';
 
 interface ParcelInfoResponse {
   registration: ParcelRegistrationInfo | null;
@@ -104,6 +110,236 @@ function mergeExternalLinks(
   };
 }
 
+function normalizePlanNumber(value: string | undefined): string {
+  return (value || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function planKeyFromInfo(plan: PlanInfo): string {
+  const normalizedNumber = normalizePlanNumber(plan.planNumber);
+  if (normalizedNumber) {
+    return normalizedNumber;
+  }
+  return `NAME:${(plan.planName || '').trim().toUpperCase()}`;
+}
+
+function mergePlanInfo(base: PlanInfo, incoming: PlanInfo): PlanInfo {
+  const mergedSource = Array.from(
+    new Set(
+      [base.source, incoming.source]
+        .flatMap((value) => (value || '').split(','))
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).join(', ');
+  return {
+    ...base,
+    ...incoming,
+    planNumber: incoming.planNumber || base.planNumber,
+    planName: incoming.planName || base.planName,
+    planStatus: incoming.planStatus || base.planStatus,
+    planType: incoming.planType || base.planType,
+    authority: incoming.authority || base.authority,
+    locality: incoming.locality || base.locality,
+    place: incoming.place || base.place,
+    takanonUrl: incoming.takanonUrl || base.takanonUrl,
+    planPageUrl: incoming.planPageUrl || base.planPageUrl,
+    lotSizeSqm: incoming.lotSizeSqm || base.lotSizeSqm,
+    maxFloors: incoming.maxFloors || base.maxFloors,
+    maxBuildableAreaSqm: incoming.maxBuildableAreaSqm || base.maxBuildableAreaSqm,
+    source: mergedSource || undefined,
+  };
+}
+
+function municipalPlansToPlanInfo(plans: MunicipalParcelPlan[]): PlanInfo[] {
+  return plans.map((plan) => ({
+    planNumber: plan.planNumber || 'ללא קוד',
+    planName: plan.planName || plan.planNumber || 'ללא תיאור',
+    planStatus: plan.planStatus,
+    planType: 'GIS עירוני',
+    locality: plan.municipality,
+    planPageUrl: plan.planPageUrl,
+    source: plan.source || 'municipal-gis',
+  }));
+}
+
+function planningRadiusPlansToPlanInfo(plans: TabaRadiusPlan[]): PlanInfo[] {
+  return plans.map((plan) => {
+    const planNumber = String(plan.tochnit ?? plan.taba_code ?? plan.PL_NUMBER ?? '').trim();
+    const planName = String(plan.taba_description ?? plan.PL_NAME ?? plan.shemtochnit ?? '').trim();
+    const locality = String(plan.yeshuvname ?? plan.locality ?? plan.PL_CITY ?? '').trim();
+    const place = String(plan.place ?? plan.PL_PLACE ?? '').trim();
+    const planStatus = String(plan.plan_status ?? plan.PL_STATUS ?? '').trim();
+    const planPageUrl = String(plan.url ?? '').trim();
+    return {
+      planNumber: planNumber || 'ללא קוד',
+      planName: planName || planNumber || 'ללא תיאור',
+      planStatus: planStatus || undefined,
+      planType: 'GovMap',
+      locality: locality || undefined,
+      place: place || undefined,
+      planPageUrl: planPageUrl || undefined,
+      source: 'govmap-planning',
+    };
+  }).filter((plan) => plan.planNumber !== 'ללא קוד' || plan.planName !== 'ללא תיאור');
+}
+
+function xplanResultToPlanInfo(result: XplanQueryResult): PlanInfo[] {
+  return result.services.flatMap((service) => {
+    return service.plans.map((plan) => ({
+      planNumber: plan.planNumber || 'ללא קוד',
+      planName: plan.planName || plan.planNumber || 'ללא תיאור',
+      planStatus: plan.status || undefined,
+      planType: service.service === 'Xplan_77_78' ? 'XPLAN 77/78' : 'XPLAN',
+      locality: plan.locality || undefined,
+      planPageUrl: plan.planUrl || undefined,
+      source: service.service === 'Xplan_77_78' ? 'xplan-77-78' : 'xplan',
+    }));
+  });
+}
+
+function applyRegulationsToPlans(plans: PlanInfo[], regulations: BuildingRegulations): PlanInfo[] {
+  if (!plans.length) {
+    return plans;
+  }
+  return plans.map((plan) => ({
+    ...plan,
+    maxFloors: plan.maxFloors || (regulations.max_floors > 0 ? regulations.max_floors : undefined),
+    maxBuildableAreaSqm: plan.maxBuildableAreaSqm
+      || (regulations.max_buildable_area_sqm > 0 ? regulations.max_buildable_area_sqm : undefined),
+  }));
+}
+
+function buildMunicipalApiUrl(
+  gush: string,
+  helka: string,
+  locationLabel: string,
+  addressHints: string[],
+  cityHint?: string,
+): string {
+  const params = new URLSearchParams();
+  params.set('gush', gush);
+  params.set('helka', helka);
+  const normalizedCityHint = cityHint?.trim() || '';
+  if (normalizedCityHint.length > 0) {
+    params.set('city_hint', normalizedCityHint);
+  }
+  if (locationLabel.trim().length > 0) {
+    params.set('location_label', locationLabel);
+  }
+  for (const address of addressHints) {
+    if (address.trim().length > 0) {
+      params.append('address_hint', address);
+    }
+  }
+  return `/api/municipal-gis-plans?${params.toString()}`;
+}
+
+function buildParcelPlanComparison(params: {
+  currentPlans: PlanInfo[];
+  tabaInfoPlans: PlanInfo[];
+  govMapPlans: PlanInfo[];
+  xplanPlans: PlanInfo[];
+  municipalPlans: PlanInfo[];
+  municipalMeta: MunicipalParcelPlansResponse | null;
+}): { finalPlans: PlanInfo[]; comparison: ParcelPlanComparison } {
+  type Presence = {
+    plan: PlanInfo;
+    inMunicipal: boolean;
+    inGovMap: boolean;
+    inXplan: boolean;
+    inTabaInfo: boolean;
+  };
+
+  const byKey = new Map<string, Presence>();
+  const ingest = (
+    plans: PlanInfo[],
+    flag: keyof Omit<Presence, 'plan'>,
+  ) => {
+    for (const plan of plans) {
+      const key = planKeyFromInfo(plan);
+      if (!key || key === 'NAME:') {
+        continue;
+      }
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, {
+          plan,
+          inMunicipal: false,
+          inGovMap: false,
+          inXplan: false,
+          inTabaInfo: false,
+          [flag]: true,
+        });
+        continue;
+      }
+
+      byKey.set(key, {
+        ...existing,
+        plan: mergePlanInfo(existing.plan, plan),
+        [flag]: true,
+      });
+    }
+  };
+
+  ingest(params.currentPlans, 'inTabaInfo');
+  ingest(params.tabaInfoPlans, 'inTabaInfo');
+  ingest(params.govMapPlans, 'inGovMap');
+  ingest(params.xplanPlans, 'inXplan');
+  ingest(params.municipalPlans, 'inMunicipal');
+
+  const municipalKeys = new Set(
+    params.municipalPlans
+      .map(planKeyFromInfo)
+      .filter((key) => key && key !== 'NAME:'),
+  );
+  const usedMunicipalFilter = Boolean(params.municipalMeta?.supported && municipalKeys.size > 0);
+
+  const finalPlans = Array.from(byKey.entries())
+    .filter(([key, presence]) => {
+      if (usedMunicipalFilter) {
+        return municipalKeys.has(key) || presence.inMunicipal;
+      }
+      return true;
+    })
+    .map(([, presence]) => presence.plan)
+    .sort((a, b) => {
+      const an = normalizePlanNumber(a.planNumber);
+      const bn = normalizePlanNumber(b.planNumber);
+      if (an && bn) {
+        return an.localeCompare(bn, 'he');
+      }
+      if (an) return -1;
+      if (bn) return 1;
+      return (a.planName || '').localeCompare(b.planName || '', 'he');
+    });
+
+  const items = Array.from(byKey.entries())
+    .map(([key, presence]) => ({
+      key,
+      planNumber: presence.plan.planNumber,
+      planName: presence.plan.planName,
+      inMunicipal: presence.inMunicipal,
+      inGovMap: presence.inGovMap,
+      inXplan: presence.inXplan,
+      inTabaInfo: presence.inTabaInfo,
+    }))
+    .sort((a, b) => a.planNumber.localeCompare(b.planNumber, 'he'));
+
+  const comparison: ParcelPlanComparison = {
+    usedMunicipalFilter,
+    counts: {
+      municipal: params.municipalPlans.length,
+      govMap: params.govMapPlans.length,
+      xplan: params.xplanPlans.length,
+      tabaInfo: params.tabaInfoPlans.length,
+      final: finalPlans.length,
+    },
+    items,
+  };
+
+  return { finalPlans, comparison };
+}
+
 export default function Home() {
   const [result, setResult] = useState<EnrichedSearchResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -181,41 +417,57 @@ export default function Home() {
 
       if (resolvedGush && resolvedHelka) {
         try {
-          const [tabaResponse, regulations, parcelInfo] = await Promise.all([
+          const municipalApiUrl = buildMunicipalApiUrl(
+            resolvedGush,
+            resolvedHelka,
+            enriched.location.label || '',
+            enriched.landPlot?.addresses ?? [],
+            params.mode === 'address' ? params.query : (enriched.landPlot?.addresses?.[0] || enriched.location.label || ''),
+          );
+
+          const [tabaResponse, regulations, parcelInfo, planningData, xplanResult, municipalPlans] = await Promise.all([
             fetchJson<TabaPlansResponse>(
               `/api/taba-info?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
-            ),
+            ).catch(() => null),
             fetchJson<BuildingRegulations>(
               `/api/building-regulations?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
-            ),
+            ).catch(() => null),
             fetchJson<ParcelInfoResponse>(
               `/api/parcel-info?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
             ).catch(() => null),
+            fetchJson<ParcelPlanningData>(
+              `/api/planning-info?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}`,
+            ).catch(() => null),
+            fetchJson<XplanQueryResult>(
+              `/api/xplan-query?gush=${encodeURIComponent(resolvedGush)}&helka=${encodeURIComponent(resolvedHelka)}&include_77_78=true&limit=200`,
+            ).catch(() => null),
+            fetchJson<MunicipalParcelPlansResponse>(municipalApiUrl).catch(() => null),
           ]);
 
           // Store TABA plans
-          const tabaPlans = Array.isArray(tabaResponse.plans) ? tabaResponse.plans : [];
-          enriched.tabaPlans = tabaPlans;
-          if (tabaPlans.length > 0) {
-            enriched.taba = tabaPlans[0];
-            enriched.plans = mergePlans(enriched.plans, tabaPlansToPlanInfo(tabaPlans));
+          let tabaPlanInfoList: PlanInfo[] = [];
+          if (tabaResponse) {
+            const tabaPlans = Array.isArray(tabaResponse.plans) ? tabaResponse.plans : [];
+            enriched.tabaPlans = tabaPlans;
+            tabaPlanInfoList = tabaPlansToPlanInfo(tabaPlans);
+            if (tabaPlans.length > 0) {
+              enriched.taba = tabaPlans[0];
+              enriched.plans = mergePlans(enriched.plans, tabaPlanInfoList);
+            }
+
+            // Merge external links from taba response
+            enriched.externalLinks = mergeExternalLinks(enriched.externalLinks, {
+              govmapTabaUrl: tabaResponse.govmap_taba_url,
+              iplanUrl: tabaResponse.iplan_url,
+            });
           }
 
-          // Merge external links from taba response
-          enriched.externalLinks = mergeExternalLinks(enriched.externalLinks, {
-            govmapTabaUrl: tabaResponse.govmap_taba_url,
-            iplanUrl: tabaResponse.iplan_url,
-          });
-
           // Store regulations and its GovMap URL
-          enriched.regulations = regulations;
-          if (enriched.plans.length > 0) {
-            enriched.plans = enriched.plans.map((plan) => ({
-              ...plan,
-              maxFloors: plan.maxFloors || (regulations.max_floors > 0 ? regulations.max_floors : undefined),
-              maxBuildableAreaSqm: plan.maxBuildableAreaSqm
-                || (regulations.max_buildable_area_sqm > 0 ? regulations.max_buildable_area_sqm : undefined),
-            }));
+          if (regulations) {
+            enriched.regulations = regulations;
+            if (enriched.plans.length > 0) {
+              enriched.plans = applyRegulationsToPlans(enriched.plans, regulations);
+            }
           }
 
           // Store parcel registration & usage code
@@ -226,6 +478,39 @@ export default function Home() {
             if (parcelInfo.usageCode) {
               enriched.parcelUsageCode = parcelInfo.usageCode;
             }
+          }
+
+          // Store planning layer data
+          if (planningData) {
+            enriched.planningData = planningData;
+          }
+
+          if (municipalPlans) {
+            enriched.municipalPlans = municipalPlans;
+          }
+
+          const govMapPlanningPlanInfo = planningData
+            ? planningRadiusPlansToPlanInfo(planningData.tabaPlans)
+            : [];
+          const xplanPlanInfo = xplanResult ? xplanResultToPlanInfo(xplanResult) : [];
+          const municipalPlanInfo = municipalPlans
+            ? municipalPlansToPlanInfo(municipalPlans.plans)
+            : [];
+
+          const { finalPlans, comparison } = buildParcelPlanComparison({
+            currentPlans: enriched.plans,
+            tabaInfoPlans: tabaPlanInfoList,
+            govMapPlans: govMapPlanningPlanInfo,
+            xplanPlans: xplanPlanInfo,
+            municipalPlans: municipalPlanInfo,
+            municipalMeta: municipalPlans,
+          });
+
+          enriched.planComparison = comparison;
+          enriched.plans = finalPlans;
+
+          if (regulations) {
+            enriched.plans = applyRegulationsToPlans(enriched.plans, regulations);
           }
         } catch (enrichmentError) {
           warning = warning || getErrorMessage(enrichmentError);

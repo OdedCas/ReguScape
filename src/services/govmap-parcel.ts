@@ -128,25 +128,34 @@ function buildWfsUrl(x3857: number, y3857: number): string {
 }
 
 /**
- * Resolve ITM coordinates to gush/helka via GovMap's public WFS endpoint.
+ * Resolve coordinates to gush/helka via GovMap's public WFS endpoint.
+ *
+ * @param coordX - X coordinate (ITM by default, or EPSG:3857 if isWebMercator=true)
+ * @param coordY - Y coordinate
+ * @param isWebMercator - If true, coordinates are already in EPSG:3857 (skip ITM conversion)
  *
  * Returns `null` when the lookup fails or no parcel is found at the given point.
  */
 export async function getParcelByCoordinates(
-  itmX: number,
-  itmY: number,
+  coordX: number,
+  coordY: number,
+  isWebMercator = false,
 ): Promise<ParcelResult | null> {
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const { x, y } = itmToWebMercator(itmX, itmY);
+    const { x, y } = isWebMercator
+      ? { x: coordX, y: coordY }
+      : itmToWebMercator(coordX, coordY);
     const url = buildWfsUrl(x, y);
 
     const response = await fetch(url, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
         Origin: 'https://www.govmap.gov.il',
         Referer: 'https://www.govmap.gov.il/',
       },

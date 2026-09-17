@@ -72,6 +72,34 @@ export interface PlanInfo {
   source?: string;
 }
 
+export interface MunicipalParcelPlan {
+  planNumber: string;
+  planName: string;
+  planStatus?: string;
+  municipality?: string;
+  providerPlanId?: string;
+  planPageUrl?: string;
+  source?: string;
+}
+
+export interface MunicipalPlanningInfoField {
+  label: string;
+  value: string;
+}
+
+export interface MunicipalPlanningInfo {
+  title: string;
+  municipality?: string;
+  gush: string;
+  helka: string;
+  source?: string;
+  provider?: string;
+  parcelQueryUrl?: string;
+  printServiceUrl?: string;
+  notes?: string[];
+  fields: MunicipalPlanningInfoField[];
+}
+
 export interface SearchResult {
   location: LocationInfo;
   plans: PlanInfo[];
@@ -152,7 +180,86 @@ export interface EnrichedSearchResult extends SearchResult {
   regulations?: BuildingRegulations;
   parcelRegistration?: ParcelRegistrationInfo;
   parcelUsageCode?: ParcelUsageCode;
+  planningData?: ParcelPlanningData;
+  municipalPlans?: MunicipalParcelPlansResponse;
+  planComparison?: ParcelPlanComparison;
   externalLinks?: ExternalLinks;
+}
+
+// ---- Planning Data (GovMap layers) ----
+
+export interface PlanningEntity {
+  objectId: number;
+  fields: Record<string, string | null>;
+}
+
+export interface PlanningLayerResult {
+  layerId: string;
+  layerName: string;
+  serviceLayerId: string;
+  entityCount: number;
+  entities: PlanningEntity[];
+}
+
+export interface TabaRadiusPlan {
+  taba_code?: string;
+  taba_description?: string;
+  plan_status?: string;
+  locality?: string;
+  place?: string;
+  PL_NUMBER?: string;
+  PL_NAME?: string;
+  PL_STATUS?: string;
+  PL_CITY?: string;
+  PL_PLACE?: string;
+  [key: string]: unknown;
+}
+
+export interface ParcelPlanningData {
+  gush: number;
+  helka: number;
+  point: [number, number];
+  parcelLabel: string;
+  layers: PlanningLayerResult[];
+  tabaPlans: TabaRadiusPlan[];
+}
+
+// ---- Municipal GIS / Source Comparison ----
+
+export interface MunicipalParcelPlansResponse {
+  supported: boolean;
+  providerId?: string;
+  providerName?: string;
+  municipality?: string;
+  gush: string;
+  helka: string;
+  parcelUrl?: string;
+  sourceUrl?: string;
+  plans: MunicipalParcelPlan[];
+  planningInfo?: MunicipalPlanningInfo;
+  error?: string;
+}
+
+export interface ParcelPlanComparisonItem {
+  key: string;
+  planNumber: string;
+  planName: string;
+  inMunicipal: boolean;
+  inGovMap: boolean;
+  inXplan: boolean;
+  inTabaInfo: boolean;
+}
+
+export interface ParcelPlanComparison {
+  usedMunicipalFilter: boolean;
+  counts: {
+    municipal: number;
+    govMap: number;
+    xplan: number;
+    tabaInfo: number;
+    final: number;
+  };
+  items: ParcelPlanComparisonItem[];
 }
 
 // ---- API Response Types ----

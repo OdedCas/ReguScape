@@ -4,12 +4,9 @@ import type {
   LocationInfo,
   PlanInfo,
   ExternalLinks,
-  GovMapSearchResponse,
-  GovMapSearchResult,
 } from '@/types';
 import { getParcelByCoordinates } from '@/services/govmap-parcel';
-
-const GOVMAP_SEARCH_URL = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery';
+import { getParcelFromAddressGovMap, searchGovMapApi } from '@/services/govmap-api';
 
 function buildGovMapUrlByCoords(x: number, y: number): string {
   return `https://www.govmap.gov.il/?x=${Math.round(x)}&y=${Math.round(y)}&z=9&b=10&lay=TABA_MSBS_ITM`;
@@ -39,76 +36,46 @@ export function buildExternalLinks(gush: string, helka: string): ExternalLinks {
   };
 }
 
-async function searchGovMap(query: string): Promise<GovMapSearchResponse> {
-  const url = new URL(GOVMAP_SEARCH_URL);
-  url.searchParams.set('query', query);
-  url.searchParams.set('lyrs', '1');
-  url.searchParams.set('gid', 'govmap');
-
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error(`GovMap API returned ${response.status}`);
-  }
-
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as GovMapSearchResponse;
-  } catch {
-    throw new Error('תשובה לא תקינה מ-GovMap');
-  }
-}
-
-function extractBestResult(govResponse: GovMapSearchResponse): GovMapSearchResult | null {
-  if (govResponse.Error !== 0 || !govResponse.data) {
-    return null;
-  }
-
-  for (const key of govResponse.order) {
-    const results = govResponse.data[key];
-    if (results && results.length > 0) {
-      return results[0];
-    }
-  }
-
-  // Fallback: check all data keys
-  for (const key of Object.keys(govResponse.data)) {
-    const results = govResponse.data[key];
-    if (results && results.length > 0) {
-      return results[0];
-    }
-  }
-
-  return null;
-}
-
-function resultToLocation(result: GovMapSearchResult): LocationInfo {
-  return {
-    label: result.ResultLable,
-    x: result.X,
-    y: result.Y,
-    gush: result.Gush || result.AData?.GUSH || undefined,
-    helka: result.Parcel || result.AData?.PARCEL || undefined,
-    objectId: result.ObjectID,
-  };
+function parseWktPoint(wkt: string): { x: number; y: number } | null {
+  const m = wkt.match(/POINT\(([^ ]+) ([^ ]+)\)/);
+  return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
 }
 
 async function searchByAddress(query: string): Promise<SearchResult> {
   const startTime = Date.now();
 
-  const govResponse = await searchGovMap(query);
-  const bestResult = extractBestResult(govResponse);
+  // Use GovMap's autocomplete API — returns accurate EPSG:3857 coordinates
+  const response = await searchGovMapApi(query, { maxResults: 5, isAccurate: true });
 
-  if (!bestResult) {
+  if (response.results.length === 0) {
     throw new Error('לא נמצאו תוצאות עבור הכתובת שהוזנה');
   }
 
-  const location = resultToLocation(bestResult);
+  const best = response.results[0];
+  const coord = parseWktPoint(best.shape);
+
+  const location: LocationInfo = {
+    label: best.text,
+    x: coord?.x ?? 0,
+    y: coord?.y ?? 0,
+  };
+
   const plans: PlanInfo[] = [];
 
-  // If GovMap search didn't return gush/helka, try coordinate-based parcel lookup.
-  if ((!location.gush || !location.helka) && location.x && location.y) {
+  try {
+    const parcelByAddress = await getParcelFromAddressGovMap(query);
+    if (parcelByAddress.gush && parcelByAddress.helka) {
+      location.gush = parcelByAddress.gush;
+      location.helka = parcelByAddress.helka;
+    }
+  } catch {
+    // Fallback to coordinate-based lookup below.
+  }
+
+  // Use the precise EPSG:3857 coordinates to find the parcel via WFS
+  if (coord && (!location.gush || !location.helka)) {
     try {
-      const parcel = await getParcelByCoordinates(location.x, location.y);
+      const parcel = await getParcelByCoordinates(coord.x, coord.y, true);
       if (parcel) {
         location.gush = parcel.gush;
         location.helka = parcel.helka;
@@ -137,22 +104,26 @@ async function searchByAddress(query: string): Promise<SearchResult> {
 async function searchByGushHelka(gush: string, helka: string): Promise<SearchResult> {
   const startTime = Date.now();
 
-  // Try to find address via GovMap search with the parcel identifier
   let label = `גוש ${gush}, חלקה ${helka}`;
   let x = 0;
   let y = 0;
 
   try {
-    // Try searching with the address format that GovMap might understand
-    const govResponse = await searchGovMap(`${gush}/${helka}`);
-    const result = extractBestResult(govResponse);
-    if (result) {
-      label = `${result.ResultLable} (גוש ${gush}, חלקה ${helka})`;
-      x = result.X;
-      y = result.Y;
+    const response = await searchGovMapApi(`גוש ${gush} חלקה ${helka}`, {
+      maxResults: 1,
+      isAccurate: true,
+    });
+    if (response.results.length > 0) {
+      const best = response.results[0];
+      label = `${best.text} (גוש ${gush}, חלקה ${helka})`;
+      const coord = parseWktPoint(best.shape);
+      if (coord) {
+        x = coord.x;
+        y = coord.y;
+      }
     }
   } catch {
-    // GovMap search didn't find results for gush/helka - expected
+    // Search didn't find results for gush/helka - expected
   }
 
   const location: LocationInfo = {

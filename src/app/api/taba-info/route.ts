@@ -14,6 +14,13 @@ function statusCodeForError(message: string): number {
   return 500;
 }
 
+function isScraperUnavailable(message: string): boolean {
+  return message.includes('not configured')
+    || message.includes('Scraper API returned 402')
+    || message.includes('Usage limit exceeded')
+    || message.includes('API call limit');
+}
+
 function mergeSinglePlan(base: TabaInfo, incoming: TabaInfo): TabaInfo {
   return {
     taba_code: incoming.taba_code || base.taba_code,
@@ -113,7 +120,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(result);
   }
 
-  if (scraperError && tabanowError && !scraperError.includes('not configured')) {
+  if (scraperError && tabanowError && !isScraperUnavailable(scraperError)) {
     return NextResponse.json(
       { error: `${scraperError}; ${tabanowError}` },
       { status: statusCodeForError(scraperError) },

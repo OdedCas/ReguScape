@@ -5,6 +5,11 @@ import {
   getLandPlotIdentifiers,
   getParcelFromAddress,
 } from '@/services/scraper';
+import {
+  getAddressFromParcelGovMap,
+  getLandPlotIdentifiersGovMap,
+  getParcelFromAddressGovMap,
+} from '@/services/govmap-api';
 import { getParcelByCoordinates } from '@/services/govmap-parcel';
 
 function parseCoordinate(raw: string | null): number | null {
@@ -28,6 +33,50 @@ function statusCodeForError(message: string): number {
     return 502;
   }
   return 500;
+}
+
+function isScraperUnavailable(message: string): boolean {
+  return message.includes('not configured')
+    || message.includes('Scraper API returned 402')
+    || message.includes('Usage limit exceeded')
+    || message.includes('API call limit');
+}
+
+function hasParcelIdentifiers(value: LandPlotIdentifiers): boolean {
+  return value.gush.trim().length > 0 && value.helka.trim().length > 0;
+}
+
+function mergeAddressLists(...lists: string[][]): string[] {
+  const unique = new Set<string>();
+  for (const list of lists) {
+    for (const raw of list) {
+      const value = raw.trim();
+      if (value) {
+        unique.add(value);
+      }
+    }
+  }
+  return Array.from(unique);
+}
+
+async function resolveParcelByCoordinatesWithFallback(
+  coordinateX: number,
+  coordinateY: number,
+  preferWebMercator = false,
+): Promise<{ gush: string; helka: string } | null> {
+  if (preferWebMercator) {
+    const webMercator = await getParcelByCoordinates(coordinateX, coordinateY, true);
+    if (webMercator) {
+      return webMercator;
+    }
+    return getParcelByCoordinates(coordinateX, coordinateY, false);
+  }
+
+  const itm = await getParcelByCoordinates(coordinateX, coordinateY, false);
+  if (itm) {
+    return itm;
+  }
+  return getParcelByCoordinates(coordinateX, coordinateY, true);
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -84,25 +133,62 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     let result: LandPlotIdentifiers;
 
     if (hasAddress) {
+      result = { gush: '', helka: '', addresses: [address] };
+
       try {
-        result = await getParcelFromAddress(address);
+        const scraperResult = await getParcelFromAddress(address);
+        result = {
+          gush: scraperResult.gush,
+          helka: scraperResult.helka,
+          addresses: mergeAddressLists(result.addresses, scraperResult.addresses),
+        };
       } catch {
+        // Continue with GovMap fallbacks below.
+      }
+
+      if (!hasParcelIdentifiers(result)) {
         try {
-          result = await getLandPlotIdentifiers({ landPlotId: address });
+          const govMapResult = await getParcelFromAddressGovMap(address);
+          result = {
+            gush: govMapResult.gush || result.gush,
+            helka: govMapResult.helka || result.helka,
+            addresses: mergeAddressLists(result.addresses, govMapResult.addresses),
+          };
         } catch {
-          // Scraper entirely unavailable — try coordinate-based GovMap lookup.
-          if (coordinateX !== null && coordinateY !== null) {
-            const parcel = await getParcelByCoordinates(coordinateX, coordinateY);
-            result = {
-              gush: parcel?.gush || '',
-              helka: parcel?.helka || '',
-              addresses: [address],
-            };
-          } else {
-            result = { gush: '', helka: '', addresses: [address] };
-          }
+          // Continue with additional fallback paths.
         }
       }
+
+      if (!hasParcelIdentifiers(result)) {
+        try {
+          const govMapLandPlot = await getLandPlotIdentifiersGovMap({ landPlotId: address });
+          result = {
+            gush: govMapLandPlot.gush || result.gush,
+            helka: govMapLandPlot.helka || result.helka,
+            addresses: mergeAddressLists(result.addresses, govMapLandPlot.addresses),
+          };
+        } catch {
+          // Continue to coordinate fallback.
+        }
+      }
+
+      if (!hasParcelIdentifiers(result) && coordinateX !== null && coordinateY !== null) {
+        try {
+          const parcel = await resolveParcelByCoordinatesWithFallback(
+            coordinateX,
+            coordinateY,
+            true,
+          );
+          result = {
+            gush: parcel?.gush || result.gush,
+            helka: parcel?.helka || result.helka,
+            addresses: result.addresses,
+          };
+        } catch {
+          // Best effort only.
+        }
+      }
+
       return NextResponse.json(result);
     }
 
@@ -110,35 +196,101 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       try {
         result = await getAddressFromParcel(gush, helka);
       } catch {
-        result = await getLandPlotIdentifiers({ landPlotId: `${gush}/${helka}` });
-        result.gush = result.gush || gush;
-        result.helka = result.helka || helka;
+        result = { gush, helka, addresses: [] };
       }
+
+      if (result.addresses.length === 0) {
+        try {
+          const govMapAddress = await getAddressFromParcelGovMap(gush, helka);
+          result.addresses = mergeAddressLists(result.addresses, govMapAddress.addresses);
+        } catch {
+          // Continue with additional fallback.
+        }
+      }
+
+      if (result.addresses.length === 0) {
+        try {
+          const fallback = await getLandPlotIdentifiersGovMap({ landPlotId: `${gush}/${helka}` });
+          result.addresses = mergeAddressLists(result.addresses, fallback.addresses);
+        } catch {
+          // Best effort only.
+        }
+      }
+
+      result.gush = result.gush || gush;
+      result.helka = result.helka || helka;
       return NextResponse.json(result);
     }
 
-    result = await getLandPlotIdentifiers({
-      coordinateX: coordinateX ?? undefined,
-      coordinateY: coordinateY ?? undefined,
-      landPlotId: hasLandPlotId ? landPlotId : undefined,
-    });
+    result = { gush: '', helka: '', addresses: [] };
+    try {
+      result = await getLandPlotIdentifiers({
+        coordinateX: coordinateX ?? undefined,
+        coordinateY: coordinateY ?? undefined,
+        landPlotId: hasLandPlotId ? landPlotId : undefined,
+      });
+    } catch {
+      // Continue with GovMap fallback.
+    }
+
+    if (!hasParcelIdentifiers(result)) {
+      try {
+        const govMapResult = await getLandPlotIdentifiersGovMap({
+          coordinateX: coordinateX ?? undefined,
+          coordinateY: coordinateY ?? undefined,
+          landPlotId: hasLandPlotId ? landPlotId : undefined,
+        });
+        result = {
+          gush: govMapResult.gush || result.gush,
+          helka: govMapResult.helka || result.helka,
+          addresses: mergeAddressLists(result.addresses, govMapResult.addresses),
+        };
+      } catch {
+        // Keep best-effort value.
+      }
+    }
 
     return NextResponse.json(result);
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'שגיאה לא צפויה';
-    const isNotConfigured = msg.includes('not configured');
+    const unavailable = isScraperUnavailable(msg);
 
-    // When scraper isn't available, try coordinate-based GovMap lookup as last resort.
-    if (isNotConfigured) {
+    // When scraper is unavailable (not configured/quota exceeded), try coordinate-based GovMap lookup as last resort.
+    if (unavailable) {
       let fallbackGush = hasGush ? gush : '';
       let fallbackHelka = hasHelka ? helka : '';
+      const fallbackAddresses: string[] = hasAddress ? [address] : [];
 
-      if (!fallbackGush && !fallbackHelka && coordinateX !== null && coordinateY !== null) {
+      if (!fallbackGush || !fallbackHelka) {
         try {
-          const parcel = await getParcelByCoordinates(coordinateX, coordinateY);
+          if (hasAddress) {
+            const byAddress = await getParcelFromAddressGovMap(address);
+            fallbackGush = fallbackGush || byAddress.gush;
+            fallbackHelka = fallbackHelka || byAddress.helka;
+          } else {
+            const generic = await getLandPlotIdentifiersGovMap({
+              coordinateX: coordinateX ?? undefined,
+              coordinateY: coordinateY ?? undefined,
+              landPlotId: hasLandPlotId ? landPlotId : undefined,
+            });
+            fallbackGush = fallbackGush || generic.gush;
+            fallbackHelka = fallbackHelka || generic.helka;
+          }
+        } catch {
+          // Continue with coordinate fallback.
+        }
+      }
+
+      if ((!fallbackGush || !fallbackHelka) && coordinateX !== null && coordinateY !== null) {
+        try {
+          const parcel = await resolveParcelByCoordinatesWithFallback(
+            coordinateX,
+            coordinateY,
+            hasAddress,
+          );
           if (parcel) {
-            fallbackGush = parcel.gush;
-            fallbackHelka = parcel.helka;
+            fallbackGush = fallbackGush || parcel.gush;
+            fallbackHelka = fallbackHelka || parcel.helka;
           }
         } catch {
           // Best-effort; continue with empty identifiers.
@@ -148,7 +300,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const fallback: LandPlotIdentifiers = {
         gush: fallbackGush,
         helka: fallbackHelka,
-        addresses: hasAddress ? [address] : [],
+        addresses: fallbackAddresses,
       };
       return NextResponse.json(fallback);
     }

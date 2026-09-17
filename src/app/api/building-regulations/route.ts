@@ -13,6 +13,13 @@ function statusCodeForError(message: string): number {
   return 500;
 }
 
+function isScraperUnavailable(message: string): boolean {
+  return message.includes('not configured')
+    || message.includes('Scraper API returned 402')
+    || message.includes('Usage limit exceeded')
+    || message.includes('API call limit');
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = request.nextUrl;
   const gush = searchParams.get('gush');
@@ -37,10 +44,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(result);
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'שגיאה לא צפויה';
-    const isNotConfigured = msg.includes('not configured');
+    const unavailable = isScraperUnavailable(msg);
 
-    // When scraper isn't available, return zeroes with GovMap link
-    if (isNotConfigured) {
+    // When scraper is unavailable (not configured/quota exceeded), return zeroes with GovMap link.
+    if (unavailable) {
       const result: BuildingRegulations = {
         max_floors: 0,
         max_buildable_area_sqm: 0,

@@ -8,7 +8,8 @@
  * Coordinate system: EPSG:3857 (Web Mercator) for search results
  */
 
-import type { LandPlotIdentifiers, TabaInfo } from '@/types';
+import type { LandPlotIdentifiers, TabaInfo, ParcelPlanningData, TabaRadiusPlan } from '@/types';
+import { getParcelByCoordinates } from '@/services/govmap-parcel';
 
 const API_BASE = 'https://www.govmap.gov.il/api';
 
@@ -102,7 +103,6 @@ export async function getParcelFromAddressGovMap(address: string): Promise<LandP
     }
 
     if (result.type === 'parcel' && result.id) {
-      const parts = result.id.split('|');
       // Try to extract gush/helka from ID parts
       const gushMatch = result.text.match(/גוש\s+(\d+)/);
       const helkaMatch = result.text.match(/חלקה\s+(\d+)/);
@@ -128,6 +128,14 @@ export async function getParcelFromAddressGovMap(address: string): Promise<LandP
         if (gushMatch) gush = gushMatch[1];
         if (helkaMatch) helka = helkaMatch[1];
         if (gush && helka) break;
+      }
+
+      if (!gush || !helka) {
+        const parcel = await getParcelByCoordinates(coord.x, coord.y, true);
+        if (parcel) {
+          gush = gush || parcel.gush;
+          helka = helka || parcel.helka;
+        }
       }
     }
   }
@@ -180,10 +188,10 @@ export async function getLandPlotIdentifiersGovMap(params: {
     );
 
     try {
-      const response = await fetch(
-        `${API_BASE}/layers-catalog/apps/parcel-search/address/${params.coordinateX},${params.coordinateY}`,
-        { headers: DEFAULT_HEADERS, cache: 'no-store' },
-      );
+      const primaryEndpoint = `${API_BASE}/apps/parcel-search/address/${params.coordinateX},${params.coordinateY}`;
+      const secondaryEndpoint = `${API_BASE}/layers-catalog/apps/parcel-search/address/${params.coordinateX},${params.coordinateY}`;
+      const response = await fetch(primaryEndpoint, { headers: DEFAULT_HEADERS, cache: 'no-store' })
+        .catch(async () => fetch(secondaryEndpoint, { headers: DEFAULT_HEADERS, cache: 'no-store' }));
 
       if (response.ok) {
         const data = await response.json();
@@ -393,6 +401,211 @@ export async function getEntitiesByField(
 
   const data = await response.json();
   return data?.data ?? data ?? [];
+}
+
+// ── WFS / GeoServer vector queries ──────────────────────────────────────
+
+/**
+ * Get exact parcel centroid via WFS CQL_FILTER on gush_num + parcel.
+ * Returns centroid [x, y] in EPSG:3857.
+ */
+export async function getParcelCentroidWFS(
+  gush: number,
+  helka: number,
+): Promise<{ centroid: [number, number]; parcelLabel: string }> {
+  console.log(`[govmap-api] getParcelCentroidWFS: gush=${gush} helka=${helka}`);
+
+  const params = new URLSearchParams({
+    service: 'WFS',
+    version: '2.0.0',
+    request: 'GetFeature',
+    typeNames: 'govmap:layer_parcel_all',
+    CQL_FILTER: `gush_num=${gush} AND parcel=${helka}`,
+    outputFormat: 'application/json',
+    count: '1',
+  });
+
+  const response = await fetch(`${API_BASE}/geoserver/wfs?${params}`, {
+    headers: { ...DEFAULT_HEADERS, Accept: 'application/json' },
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(`GovMap WFS API returned ${response.status}`);
+  }
+
+  const data = await response.json();
+  const features = data?.features ?? [];
+  if (features.length === 0) {
+    throw new Error(`WFS: parcel gush ${gush} helka ${helka} not found`);
+  }
+
+  const geom = features[0].geometry;
+  let cx: number, cy: number;
+
+  if (geom.type === 'Point') {
+    [cx, cy] = geom.coordinates;
+  } else if (geom.type === 'Polygon') {
+    const ring: number[][] = geom.coordinates[0];
+    let sumX = 0, sumY = 0;
+    for (const [x, y] of ring) {
+      sumX += x;
+      sumY += y;
+    }
+    cx = sumX / ring.length;
+    cy = sumY / ring.length;
+  } else if (geom.type === 'MultiPolygon') {
+    const ring: number[][] = geom.coordinates[0][0];
+    let sumX = 0, sumY = 0;
+    for (const [x, y] of ring) {
+      sumX += x;
+      sumY += y;
+    }
+    cx = sumX / ring.length;
+    cy = sumY / ring.length;
+  } else {
+    throw new Error(`Unexpected geometry type: ${geom.type}`);
+  }
+
+  const props = features[0].properties ?? {};
+  const parcelLabel = `גוש ${props.gush_num ?? gush} חלקה ${props.parcel ?? helka}`;
+
+  return { centroid: [cx, cy], parcelLabel };
+}
+
+/**
+ * Search taba plans by radius using geoJson point format.
+ */
+export async function getTabaByRadiusGeoJson(
+  x: number,
+  y: number,
+  radius = 50,
+): Promise<TabaRadiusPlan[]> {
+  console.log(`[govmap-api] getTabaByRadiusGeoJson: (${x}, ${y}) r=${radius}`);
+
+  const response = await fetch(`${API_BASE}/taba/taba/radius`, {
+    method: 'POST',
+    headers: DEFAULT_HEADERS,
+    body: JSON.stringify({
+      geoJson: { type: 'Point', coordinates: [x, y] },
+      radius,
+    }),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(`GovMap taba radius API returned ${response.status}`);
+  }
+
+  const data = await response.json();
+  return Array.isArray(data) ? data : data?.tabaPlans ?? data?.plans ?? [];
+}
+
+// ── Planning data (all layers for a parcel) ────────────────────────────────
+
+const PLANNING_LAYERS = [
+  { id: '294', name: 'תב"ע', serviceLayerId: 'govmap:layer_taba_msbs_itm' },
+  { id: '358', name: 'רמ"י-תכניות אב', serviceLayerId: 'govmap:layer_tochniot' },
+  { id: '50', name: 'תכניות בהכנה', serviceLayerId: 'govmap:layer_talar_prep' },
+  { id: '361', name: 'תכניות בעבודה-רמ"י', serviceLayerId: 'govmap:layer_tochniotavoda' },
+  { id: '203', name: 'קווים כחולים מבא"ת', serviceLayerId: 'govmap:layer_mehoziot_app_taba' },
+  { id: '14', name: 'יעודי קרקע-מבא"ת', serviceLayerId: 'govmap:layer_mehoziot_app_yk' },
+] as const;
+
+interface RawEntityField {
+  fieldName: string;
+  fieldDisplay: string;
+  fieldValue: string | null;
+  fieldType: number;
+}
+
+interface RawEntity {
+  objectId: number;
+  centroid: number[];
+  geom: string;
+  fields: RawEntityField[];
+}
+
+interface RawLayer {
+  name: string;
+  caption: string;
+  entities: RawEntity[];
+}
+
+/**
+ * Get all planning data for a parcel across 6 planning-related layers.
+ *
+ * 3-step exact pipeline:
+ * 1. Exact parcel centroid via WFS (no fuzzy text search)
+ * 2. entitiesByPoint across all planning layers using exact centroid
+ * 3. taba/radius with geoJson for תכנית אב/מתאר data
+ */
+export async function getParcelPlanningData(
+  gush: string,
+  helka: string,
+): Promise<ParcelPlanningData> {
+  console.log(`[govmap-api] getParcelPlanningData: gush=${gush} helka=${helka}`);
+
+  // Step 1: exact parcel centroid via WFS
+  const { centroid: point, parcelLabel } = await getParcelCentroidWFS(Number(gush), Number(helka));
+
+  // Step 2: query all planning layers at this exact point
+  const layers = PLANNING_LAYERS.map((l) => ({ layerId: l.id }));
+
+  const response = await fetch(`${API_BASE}/layers-catalog/entitiesByPoint`, {
+    method: 'POST',
+    headers: DEFAULT_HEADERS,
+    body: JSON.stringify({
+      point,
+      layers,
+      tolerance: 10,
+      calculateDistance: false,
+    }),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(`GovMap entitiesByPoint API returned ${response.status}`);
+  }
+
+  const json = await response.json();
+  const rawLayers: RawLayer[] = json?.data ?? [];
+
+  const layerResults = rawLayers.map((layer) => {
+    const layerDef = PLANNING_LAYERS.find(
+      (l) => l.serviceLayerId === layer.name || l.name === layer.caption,
+    );
+    return {
+      layerId: layerDef?.id ?? layer.name,
+      layerName: layerDef?.name ?? layer.caption,
+      serviceLayerId: layer.name,
+      entityCount: layer.entities.length,
+      entities: layer.entities.map((e) => {
+        const fields: Record<string, string | null> = {};
+        for (const f of e.fields) {
+          fields[f.fieldName] = f.fieldValue;
+        }
+        return { objectId: e.objectId, fields };
+      }),
+    };
+  });
+
+  // Step 3: taba/radius for תכנית אב/מתאר data
+  let tabaPlans: TabaRadiusPlan[] = [];
+  try {
+    tabaPlans = await getTabaByRadiusGeoJson(point[0], point[1], 50);
+  } catch {
+    // taba/radius may fail — non-critical, continue with layer data
+  }
+
+  return {
+    gush: Number(gush),
+    helka: Number(helka),
+    point,
+    parcelLabel,
+    layers: layerResults,
+    tabaPlans,
+  };
 }
 
 // ── Search Types ───────────────────────────────────────────────────────────
